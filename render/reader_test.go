@@ -7,8 +7,10 @@ package render
 import (
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,4 +49,28 @@ func TestReaderRenderDoesNotModifyHeaders(t *testing.T) {
 	require.Empty(t, w.Header().Get("Content-Length"))
 	require.Equal(t, "public", w.Header().Get("Cache-Control"))
 	require.Equal(t, "hello, world!", w.Body.String())
+}
+
+// Run with -race: rendering concurrently with a shared Headers map must not
+// write to the map.
+func TestReaderRenderConcurrentSharedHeaders(t *testing.T) {
+	headers := map[string]string{"Cache-Control": "public"}
+
+	const goroutines = 50
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			r := Reader{
+				ContentLength: 5,
+				Reader:        strings.NewReader("hello"),
+				Headers:       headers,
+			}
+			assert.NoError(t, r.Render(httptest.NewRecorder()))
+		}()
+	}
+	wg.Wait()
+
+	require.Equal(t, map[string]string{"Cache-Control": "public"}, headers)
 }
